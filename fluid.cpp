@@ -23,7 +23,7 @@ using namespace std;
 #endif
 
 constexpr size_t T = 1'000'000;
-constexpr string FIELD_FILE = "field.txt";
+constexpr string_view FIELD_FILE = "field.txt";
 
 string get_field() {
   ifstream file(FIELD_FILE);
@@ -89,7 +89,7 @@ void size_to_template(const std::string &p_type, const std::string &v_type,
     size_to_template<PreasureT, VelocityT, VelocityFlowT, Ts...>(
         p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found");
+    throw std::runtime_error("No matching template found size");
   }
 }
 
@@ -105,7 +105,7 @@ void v_flow_type_to_template(const std::string &p_type,
     v_flow_type_to_template<PreasureT, VelocityT, Ts...>(p_type, v_type,
                                                          v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found");
+    throw std::runtime_error("No matching template found v-flow");
   }
 }
 
@@ -119,7 +119,7 @@ void v_type_to_template(const std::string &p_type, const std::string &v_type,
   } else if constexpr (sizeof...(Ts) > 0) {
     v_type_to_template<PreasureT, Ts...>(p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found");
+    throw std::runtime_error("No matching template found velocity");
   }
 }
 
@@ -132,7 +132,7 @@ void p_type_to_template(const std::string &p_type, const std::string &v_type,
   } else if constexpr (sizeof...(Ts) > 0) {
     p_type_to_template<Ts...>(p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found");
+    throw std::runtime_error("No matching template found p-type");
   }
 }
 

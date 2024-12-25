@@ -2,16 +2,23 @@
 #define BIGHW2__SIMULATION_H_
 
 #include <algorithm>
-#include <cstring>
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <functional>
 #include <iostream>
 #include <random>
+#include <thread>
 #include <tuple>
 #include <utility>
 
 using namespace std;
+
+#ifndef MAX_THREADS
+#define MAX_THREADS 4
+#endif
 
 constexpr std::array<pair<int, int>, 4> deltas{
     {{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
@@ -22,6 +29,42 @@ template <size_t N, size_t M> struct Size {
 };
 
 mt19937 rnd(1337);
+
+class ThreadPool {
+public:
+  ThreadPool() = default;
+
+  void add_task(std::function<void()> task) { tasks.push_back(task); }
+
+  void run() {
+    threads.clear();
+    next_task = 0;
+    for (size_t i = 0; i < MAX_THREADS; ++i) {
+      threads.emplace_back([this]() {
+        while (true) {
+          size_t task_id = next_task++;
+          if (task_id >= tasks.size()) {
+            break;
+          }
+          tasks[task_id]();
+        }
+      });
+    }
+
+    for (auto &thread : threads) {
+      thread.join();
+    }
+
+    threads.clear();
+    tasks.clear();
+  }
+
+public:
+private:
+  std::vector<std::thread> threads;
+  std::vector<std::function<void()>> tasks;
+  std::atomic<size_t> next_task = 0;
+};
 
 template <typename PreasureT, typename VelocityT, typename VelocityFlowT,
           size_t N, size_t M>
@@ -34,9 +77,15 @@ private:
     }
 
     T &get(int x, int y, int dx, int dy) {
-      size_t i = ranges::find(deltas, pair(dx, dy)) - deltas.begin();
-      assert(i < deltas.size());
-      return v[x][y][i];
+      if (dx == -1) {
+        return v[x][y][0];
+      } else if (dx == 1) {
+        return v[x][y][1];
+      } else if (dy == -1) {
+        return v[x][y][2];
+      } else {
+        return v[x][y][3];
+      }
     }
   };
 
@@ -272,6 +321,8 @@ private:
 
 public:
   void tick(size_t i) {
+    ThreadPool pool;
+    std::mutex mtx;
     PreasureT total_delta_p = 0;
     // Apply external forces
     for (size_t x = 0; x < N; ++x) {
@@ -289,27 +340,30 @@ public:
       for (size_t y = 0; y < M; ++y) {
         if (field[x][y] == '#')
           continue;
-        for (auto [dx, dy] : deltas) {
-          int nx = x + dx, ny = y + dy;
-          if (field[nx][ny] != '#' && old_p[nx][ny] < old_p[x][y]) {
-            auto delta_p = old_p[x][y] - old_p[nx][ny];
-            auto force = delta_p;
-            auto &contr = velocity.get(nx, ny, -dx, -dy);
-            if (contr * VelocityT(rho[(int)field[nx][ny]]) >=
-                VelocityT(force)) {
-              contr -= VelocityT(force / rho[(int)field[nx][ny]]);
-              continue;
+        pool.add_task([this, x, y, &mtx, &total_delta_p]() {
+          for (auto [dx, dy] : deltas) {
+            int nx = x + dx, ny = y + dy;
+            if (field[nx][ny] != '#' && old_p[nx][ny] < old_p[x][y]) {
+              auto delta_p = old_p[x][y] - old_p[nx][ny];
+              auto force = delta_p;
+              auto &contr = velocity.get(nx, ny, -dx, -dy);
+              if (contr * VelocityT(rho[(int)field[nx][ny]]) >=
+                  VelocityT(force)) {
+                contr -= VelocityT(force / rho[(int)field[nx][ny]]);
+                return;
+              }
+              force -= PreasureT(contr) * rho[(int)field[nx][ny]];
+              contr = 0;
+              velocity.add(x, y, dx, dy,
+                           VelocityT(force / rho[(int)field[x][y]]));
+              p[x][y] -= force / PreasureT(dirs[x][y]);
+              total_delta_p -= force / PreasureT(dirs[x][y]);
             }
-            force -= PreasureT(contr) * rho[(int)field[nx][ny]];
-            contr = 0;
-            velocity.add(x, y, dx, dy,
-                         VelocityT(force / rho[(int)field[x][y]]));
-            p[x][y] -= force / PreasureT(dirs[x][y]);
-            total_delta_p -= force / PreasureT(dirs[x][y]);
           }
-        }
+        });
       }
     }
+    pool.run();
 
     // Make flow from velocities
     velocity_flow = {};
@@ -334,29 +388,32 @@ public:
       for (size_t y = 0; y < M; ++y) {
         if (field[x][y] == '#')
           continue;
-        for (auto [dx, dy] : deltas) {
-          auto old_v = velocity.get(x, y, dx, dy);
-          auto new_v = velocity_flow.get(x, y, dx, dy);
-          if (old_v > VelocityT(0)) {
-            assert(VelocityT(new_v) <= old_v);
-            velocity.get(x, y, dx, dy) = VelocityT(new_v);
-            auto force = (VelocityFlowT(old_v) - new_v) *
-                         VelocityFlowT(rho[(int)field[x][y]]);
-            if (field[x][y] == '.')
-              force *= VelocityFlowT(0.8);
-            if (field[x + dx][y + dy] == '#') {
-              p[x][y] += PreasureT(force) / PreasureT(dirs[x][y]);
-              total_delta_p += PreasureT(force) / PreasureT(dirs[x][y]);
-            } else {
-              p[x + dx][y + dy] +=
-                  PreasureT(force) / PreasureT(dirs[x + dx][y + dy]);
-              total_delta_p +=
-                  PreasureT(force) / PreasureT(dirs[x + dx][y + dy]);
+        pool.add_task([this, x, y, &mtx, &total_delta_p]() {
+          for (auto [dx, dy] : deltas) {
+            auto old_v = velocity.get(x, y, dx, dy);
+            auto new_v = velocity_flow.get(x, y, dx, dy);
+            if (old_v > VelocityT(0)) {
+              assert(VelocityT(new_v) <= old_v);
+              velocity.get(x, y, dx, dy) = VelocityT(new_v);
+              auto force = (VelocityFlowT(old_v) - new_v) *
+                           VelocityFlowT(rho[(int)field[x][y]]);
+              if (field[x][y] == '.')
+                force *= VelocityFlowT(0.8);
+              if (field[x + dx][y + dy] == '#') {
+                p[x][y] += PreasureT(force) / PreasureT(dirs[x][y]);
+                total_delta_p += PreasureT(force) / PreasureT(dirs[x][y]);
+              } else {
+                p[x + dx][y + dy] +=
+                    PreasureT(force) / PreasureT(dirs[x + dx][y + dy]);
+                total_delta_p +=
+                    PreasureT(force) / PreasureT(dirs[x + dx][y + dy]);
+              }
             }
           }
-        }
+        });
       }
     }
+    pool.run();
 
     UT += 2;
     prop = false;

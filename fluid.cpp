@@ -1,6 +1,7 @@
 #include "fixed.h"
 #include "simulation.h"
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -22,8 +23,8 @@ using namespace std;
 #define SIZES S(36, 84), S(10, 10)
 #endif
 
-constexpr size_t T = 1'000'000;
-constexpr string_view FIELD_FILE = "field.txt";
+constexpr size_t T = 100;
+constexpr string FIELD_FILE = "field.txt";
 
 string get_field() {
   ifstream file(FIELD_FILE);
@@ -89,7 +90,7 @@ void size_to_template(const std::string &p_type, const std::string &v_type,
     size_to_template<PreasureT, VelocityT, VelocityFlowT, Ts...>(
         p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found size");
+    throw std::runtime_error("No matching template found");
   }
 }
 
@@ -105,7 +106,7 @@ void v_flow_type_to_template(const std::string &p_type,
     v_flow_type_to_template<PreasureT, VelocityT, Ts...>(p_type, v_type,
                                                          v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found v-flow");
+    throw std::runtime_error("No matching template found");
   }
 }
 
@@ -119,7 +120,7 @@ void v_type_to_template(const std::string &p_type, const std::string &v_type,
   } else if constexpr (sizeof...(Ts) > 0) {
     v_type_to_template<PreasureT, Ts...>(p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found velocity");
+    throw std::runtime_error("No matching template found");
   }
 }
 
@@ -132,7 +133,7 @@ void p_type_to_template(const std::string &p_type, const std::string &v_type,
   } else if constexpr (sizeof...(Ts) > 0) {
     p_type_to_template<Ts...>(p_type, v_type, v_flow_type, field);
   } else {
-    throw std::runtime_error("No matching template found p-type");
+    throw std::runtime_error("No matching template found");
   }
 }
 
@@ -156,6 +157,12 @@ int main(int argc, char *argv[]) {
   if (p_type.empty() || v_type.empty() || v_flow_type.empty()) {
     return 1;
   }
+
+  auto start = std::chrono::high_resolution_clock::now();
+  run_with_params(p_type, v_type, v_flow_type, get_field());
+  auto end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> elapsed = end - start;
+  std::cout << "Simulation took " << elapsed.count() << " seconds.\n";
   run_with_params(p_type, v_type, v_flow_type, get_field());
 
   return 0;
